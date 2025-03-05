@@ -1,0 +1,109 @@
+version: '3.8'
+services:
+  # Zookeeper để quản lý Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  # Kafka để xử lý streaming data
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    depends_on:
+      - zookeeper
+
+  # Kafka UI để quản lý Kafka Topics
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8081:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: "LocalKafka"
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "kafka:9092"
+    depends_on:
+      - kafka
+
+  # MongoDB để lưu trữ dữ liệu
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+  # PostgreSQL cho Airflow và Metabase
+  postgres:
+    image: postgres:latest
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: metabase
+      POSTGRES_PASSWORD: metabase
+      POSTGRES_DB: metabase
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # Apache Airflow để chạy ETL pipeline
+  airflow:
+    image: apache/airflow:latest
+    container_name: airflow
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./etl:/opt/airflow/dags
+    environment:
+      - LOAD_EX=n
+      - EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://metabase:metabase@postgres:5432/metabase
+    depends_on:
+      - postgres
+
+  # Metabase để trực quan hóa dữ liệu
+  metabase:
+    image: metabase/metabase:latest
+    container_name: metabase
+    ports:
+      - "8083:3000"
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: metabase
+      MB_DB_PORT: 5432
+      MB_DB_USER: metabase
+      MB_DB_PASS: metabase
+      MB_DB_HOST: postgres
+    depends_on:
+      - postgres
+    volumes:
+      - metabase_data:/metabase-data
+
+  # ETL Service để chạy Kafka Producer, Consumer, và Pipeline
+  etl:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: etl_service
+    depends_on:
+      - kafka
+      - mongodb
+    volumes:
+      - ./etl:/app
+      - ./data/amazon_delivery.csv:/app/amazon_delivery.csv  # Mount file CSV vào container
+    command: ["sh", "-c", "sleep 10 && python kafka_producer.py && python kafka_consumer.py && python etl_pipeline.py"]
+
+volumes:
+  mongodb_data:
+  metabase_data:
+  postgres_data:
